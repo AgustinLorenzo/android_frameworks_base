@@ -34,6 +34,7 @@ import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.res.Resources;
 import android.os.BatteryManager;
 import android.os.BatteryManagerInternal;
 import android.os.BatteryProperties;
@@ -155,6 +156,16 @@ public final class BatteryService extends SystemService {
 
     private Led mLed;
 
+    //Battery light color customization
+    private boolean mAllowBatteryLightOnDnd;
+    private boolean mIsDndActive;
+    private boolean mLowBatteryBlinking;
+    private boolean mMultiColorLed;
+    private int mBatteryLowARGB;
+    private int mBatteryMediumARGB;
+    private int mBatteryFullARGB;
+    private int mBatteryReallyFullARGB;
+
     private boolean mSentLowBatteryBroadcast = false;
 
     private ActivityManagerInternal mActivityManagerInternal;
@@ -233,16 +244,75 @@ public final class BatteryService extends SystemService {
                 updateBatteryWarningLevelLocked();
             }
         } else if (phase == PHASE_BOOT_COMPLETED) {
-            mLineageBatteryLights = new LineageBatteryLights(mContext,
-                    new LineageBatteryLights.LedUpdater() {
-                public void update() {
-                    updateLedPulse();
-                }
-            });
-
-            // Update light state now that mLineageBatteryLights has been initialized.
-            updateLedPulse();
+            SettingsObserver mObserver = new SettingsObserver(new Handler());
+            mObserver.observe();
         }
+    }
+
+    private synchronized void updateLed() {
+        mLed.updateLightsLocked();
+    }
+
+    class SettingsObserver extends ContentObserver {
+        SettingsObserver(Handler handler) {
+            super(handler);
+        }
+
+        void observe() {
+            ContentResolver resolver = mContext.getContentResolver();
+
+            resolver.registerContentObserver(Settings.System.getUriFor(
+                    Settings.System.BATTERY_LIGHT_ALLOW_ON_DND),
+                    false, this, UserHandle.USER_ALL);
+            resolver.registerContentObserver(
+                    Settings.Global.getUriFor(Settings.Global.ZEN_MODE),
+                    false, this, UserHandle.USER_ALL);
+            resolver.registerContentObserver(Settings.System.getUriFor(
+                    Settings.System.BATTERY_LIGHT_LOW_BLINKING),
+                    false, this, UserHandle.USER_ALL);
+            if (mMultiColorLed) {
+                resolver.registerContentObserver(Settings.System.getUriFor(
+                        Settings.System.BATTERY_LIGHT_LOW_COLOR),
+                        false, this, UserHandle.USER_ALL);
+                resolver.registerContentObserver(Settings.System.getUriFor(
+                        Settings.System.BATTERY_LIGHT_MEDIUM_COLOR),
+                        false, this, UserHandle.USER_ALL);
+                resolver.registerContentObserver(Settings.System.getUriFor(
+                        Settings.System.BATTERY_LIGHT_FULL_COLOR),
+                        false, this, UserHandle.USER_ALL);
+                resolver.registerContentObserver(Settings.System.getUriFor(
+                        Settings.System.BATTERY_LIGHT_REALLYFULL_COLOR),
+                        false, this, UserHandle.USER_ALL);
+            }
+            update();
+        }
+
+        @Override
+        public void onChange(boolean selfChange) {
+            update();
+        }
+
+        public void update() {
+            ContentResolver resolver = mContext.getContentResolver();
+            Resources res = mContext.getResources();
+
+            mAllowBatteryLightOnDnd = Settings.System.getInt(resolver,
+                    Settings.System.BATTERY_LIGHT_ALLOW_ON_DND, 0) == 1;
+            mIsDndActive = Settings.Global.getInt(resolver,
+                    Settings.Global.ZEN_MODE, Settings.Global.ZEN_MODE_OFF)
+                    != Settings.Global.ZEN_MODE_OFF;
+            mLowBatteryBlinking = Settings.System.getInt(resolver,
+                    Settings.System.BATTERY_LIGHT_LOW_BLINKING, 0) == 1;
+            mBatteryLowARGB = Settings.System.getInt(resolver,
+                    Settings.System.BATTERY_LIGHT_LOW_COLOR, 0xFFFF0000);
+            mBatteryMediumARGB = Settings.System.getInt(resolver,
+                    Settings.System.BATTERY_LIGHT_MEDIUM_COLOR, 0xFFFFFF00);
+            mBatteryFullARGB = Settings.System.getInt(resolver,
+                    Settings.System.BATTERY_LIGHT_FULL_COLOR, 0xFF00FF00);
+            mBatteryReallyFullARGB = Settings.System.getInt(resolver,
+                    Settings.System.BATTERY_LIGHT_REALLYFULL_COLOR, 0xFF00FF00);
+
+            updateLed();        }
     }
 
     private void updateBatteryWarningLevelLocked() {
@@ -900,21 +970,15 @@ public final class BatteryService extends SystemService {
     private final class Led {
         private final Light mBatteryLight;
 
-        private final int mBatteryLowARGB;
-        private final int mBatteryMediumARGB;
-        private final int mBatteryFullARGB;
         private final int mBatteryLedOn;
         private final int mBatteryLedOff;
 
         public Led(Context context, LightsManager lights) {
             mBatteryLight = lights.getLight(LightsManager.LIGHT_ID_BATTERY);
 
-            mBatteryLowARGB = context.getResources().getInteger(
-                    com.android.internal.R.integer.config_notificationsBatteryLowARGB);
-            mBatteryMediumARGB = context.getResources().getInteger(
-                    com.android.internal.R.integer.config_notificationsBatteryMediumARGB);
-            mBatteryFullARGB = context.getResources().getInteger(
-                    com.android.internal.R.integer.config_notificationsBatteryFullARGB);
+            // Does the Device support changing battery LED colors?
+            mMultiColorLed = context.getResources().getBoolean(
+                    com.android.internal.R.bool.config_multiColorBatteryLed);
             mBatteryLedOn = context.getResources().getInteger(
                     com.android.internal.R.integer.config_notificationsBatteryLedOn);
             mBatteryLedOff = context.getResources().getInteger(
